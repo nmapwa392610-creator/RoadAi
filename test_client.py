@@ -1,4 +1,4 @@
-from src.detector import Detector
+from RoadAi.src.core.detector import Detector
 
 detector = Detector()
 

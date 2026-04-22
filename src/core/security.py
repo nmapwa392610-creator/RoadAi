@@ -1,9 +1,7 @@
 import time
 from pathlib import Path
 
-# -------------------------
-# RATE LIMIT (simple in-memory)
-# -------------------------
+# RATE LIMIT
 _requests = {}
 
 def rate_limit(ip: str, limit: int = 10, window: int = 60):
@@ -21,9 +19,7 @@ def rate_limit(ip: str, limit: int = 10, window: int = 60):
     return True
 
 
-# -------------------------
 # FILE CHECKS
-# -------------------------
 ALLOWED_EXT = [".mp4", ".avi", ".jpg", ".png"]
 MAX_SIZE_MB = 100
 MAX_FRAMES = 10_000
@@ -45,9 +41,7 @@ def check_file(file):
     return True, None
 
 
-# -------------------------
 # VIDEO LENGTH CHECK
-# -------------------------
 import cv2
 
 def check_video_length(path):
@@ -61,9 +55,7 @@ def check_video_length(path):
     return True, None
 
 
-# -------------------------
 # RTSP CHECK
-# -------------------------
 def check_rtsp(url: str):
     if not url.startswith("rtsp://"):
         return False

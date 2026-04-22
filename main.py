@@ -1,79 +1,119 @@
-from fastapi import FastAPI, UploadFile, File, WebSocket
+import asyncio
+import traceback
+
+from src.services.file_service import run_with_temp_file
+from src.pipelines.image import run_pipeline_image
+
+from fastapi import FastAPI, UploadFile, File, WebSocket, Request
 from pydantic import BaseModel
 from pathlib import Path
-import shutil
-import traceback
-import uuid
 
-from src.engine import AIEngine
+from src.core.engine import AIEngine
+from src.core.security import rate_limit, check_file
 
-app = FastAPI(title="Road AI PRO 🚀")
 
+app = FastAPI(title="Road AI")
 engine = AIEngine()
 
-UPLOAD_DIR = Path("data/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-
-# -------------------------
-# HOME
-# -------------------------
 @app.get("/")
 def home():
-    return {"status": "running", "system": "Road AI PRO"}
+    return {
+        "status": "running",
+        "system": "Road AI",
+        "version": "2.0"
+    }
 
 
-# -------------------------
-# IMAGE
-# -------------------------
+# IMAGE DETECTION
 @app.post("/detect/image")
-async def detect_image(file: UploadFile = File(...)):
+async def detect_image(request: Request, file: UploadFile = File(...)):
     try:
-        ext = Path(file.filename).suffix
-        file_path = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
+        ip = request.client.host
+        if not rate_limit(ip):
+            return {"error": "rate limit exceeded"}
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
 
-        result = await engine.run("image", str(file_path))
+        ok, err = check_file(file)
+        if not ok:
+            return {"error": err}
 
-        return {"result": result}
+        ext = Path(file.filename).suffix.lower()
+        file_bytes = await file.read()
+
+
+        result = await asyncio.to_thread(
+            run_with_temp_file,
+            file_bytes=file_bytes,
+            ext=ext,
+            pipeline_func=run_pipeline_image
+        )
+
+        return {
+            "status": "ok",
+            "result": result
+        }
 
     except Exception as e:
-        return {"error": str(e), "trace": traceback.format_exc()}
+        return {
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }
 
 
-# -------------------------
-# VIDEO
-# -------------------------
+
 @app.post("/detect/video")
-async def detect_video(file: UploadFile = File(...)):
+async def detect_video(request: Request, file: UploadFile = File(...)):
     try:
-        ext = Path(file.filename).suffix
-        file_path = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
+        ip = request.client.host
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if not rate_limit(ip):
+            return {"error": "rate limit exceeded"}
 
-        result = await engine.run("video", str(file_path))
+        ok, err = check_file(file)
+        if not ok:
+            return {"error": err}
 
-        return {"result": result}
+        ext = Path(file.filename).suffix.lower()
+        file_bytes = await file.read()
+
+        result = await asyncio.to_thread(
+            run_with_temp_file,
+            file_bytes=file_bytes,
+            ext=ext,
+            pipeline_func=engine.run_video
+        )
+
+        return {"status": "ok", "result": result}
 
     except Exception as e:
-        return {"error": str(e), "trace": traceback.format_exc()}
+        return {
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }
 
 
-# -------------------------
-# RTSP MODEL
-# -------------------------
+# RTSP CONTROL
 class RTSPRequest(BaseModel):
     url: str
 
 
 @app.post("/rtsp/start")
-async def rtsp_start(req: RTSPRequest):
+async def rtsp_start(req: RTSPRequest, request: Request):
     try:
-        return await engine.run("rtsp_start", req.url)
+        ip = request.client.host
+
+        if not rate_limit(ip):
+            return {"error": "rate limit exceeded"}
+
+        if not req.url.startswith("rtsp://"):
+            return {"error": "invalid rtsp url"}
+
+        return await asyncio.to_thread(
+            engine.start_rtsp,
+            req.url
+        )
+
     except Exception as e:
         return {"error": str(e), "trace": traceback.format_exc()}
 
@@ -81,22 +121,35 @@ async def rtsp_start(req: RTSPRequest):
 @app.post("/rtsp/stop")
 async def rtsp_stop():
     try:
-        return await engine.run("rtsp_stop", None)
+        return await asyncio.to_thread(
+            engine.stop_rtsp
+        )
+
     except Exception as e:
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
-# -------------------------
-# WEBSOCKET LIVE STREAM
-# -------------------------
+
 @app.websocket("/ws/live")
-async def websocket_live(ws: WebSocket):
+async def ws_live(ws: WebSocket):
     await ws.accept()
 
     try:
         while True:
-            data = await engine.get_live_frame()
-            await ws.send_json(data)
+            data = engine.get_live_frame()
+
+            if not data:
+                await asyncio.sleep(0.05)
+                continue
+
+            await ws.send_json({
+                "status": "ok",
+                "data": data
+            })
+
 
     except Exception as e:
-        await ws.send_json({"error": str(e)})
+        try:
+            await ws.send_json({"error": str(e)})
+        except:
+            pass

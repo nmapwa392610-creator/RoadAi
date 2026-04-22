@@ -1,24 +1,55 @@
 from src.pipelines.image import run_pipeline_image
 from src.pipelines.video import process_video
-from src.streams.rtsp_usual import start_rtsp_stream, stop_rtsp_stream, get_live_frame
-
+from src.pipelines.frame import run_pipeline_frame
+from src.pipelines.rtsp_usual import start_rtsp_stream, stop_rtsp_stream
 
 class AIEngine:
-    def run(self, mode: str, data):
 
-        if mode == "image":
-            return run_pipeline_image(data)
+    def __init__(self):
+        self.streams = {}
 
-        if mode == "video":
-            return process_video(data)
+    def run_image(self, path):
+        return run_pipeline_image(path)
 
-        if mode == "rtsp_start":
-            return start_rtsp_stream(data)
+    def run_video(self, path):
+        return process_video(path)
 
-        if mode == "rtsp_stop":
-            return stop_rtsp_stream()
+    def process_frame(self, frame):
+        return run_pipeline_frame(frame)
 
-        return {"error": "unknown mode"}
+    def start_rtsp(self, url, camera_id="default"):
 
-    def get_live_frame(self):
-        return get_live_frame()
+        def callback(frame):
+            result = self.process_frame(frame)
+            self.streams[camera_id] = {
+                "frame": frame,
+                "result": result
+            }
+
+        stream = start_rtsp_stream(url, callback)
+        self.streams[camera_id] = stream
+
+        return {
+            "status": "started",
+            "camera_id": camera_id
+        }
+
+    def stop_rtsp(self, camera_id="default"):
+
+        stream = self.streams.get(camera_id)
+
+        if stream:
+            stop_rtsp_stream(stream)
+            self.streams.pop(camera_id, None)
+
+        return {"status": "stopped"}
+
+    # ---------------- LIVE FRAME ----------------
+    def get_live_frame(self, camera_id="default"):
+
+        data = self.streams.get(camera_id)
+
+        if not data:
+            return None
+
+        return data.get("result")
