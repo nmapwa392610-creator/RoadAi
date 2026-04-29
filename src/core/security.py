@@ -1,7 +1,20 @@
 import time
+import os
+import secrets
 from pathlib import Path
+import cv2
 
-# RATE LIMIT
+# ─── API KEY AUTH ────────────────────────────────────────────────
+INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
+
+def verify_api_key(request) -> bool:
+    key = request.headers.get("X-API-Key", "")
+    if not key or not INTERNAL_API_KEY:
+        return False
+    return secrets.compare_digest(key, INTERNAL_API_KEY)
+
+
+# ─── RATE LIMIT ──────────────────────────────────────────────────
 _requests = {}
 
 def rate_limit(ip: str, limit: int = 10, window: int = 60):
@@ -19,7 +32,7 @@ def rate_limit(ip: str, limit: int = 10, window: int = 60):
     return True
 
 
-# FILE CHECKS
+# ─── FILE CHECKS ─────────────────────────────────────────────────
 ALLOWED_EXT = [".mp4", ".avi", ".jpg", ".png"]
 MAX_SIZE_MB = 100
 MAX_FRAMES = 10_000
@@ -41,9 +54,7 @@ def check_file(file):
     return True, None
 
 
-# VIDEO LENGTH CHECK
-import cv2
-
+# ─── VIDEO LENGTH CHECK ──────────────────────────────────────────
 def check_video_length(path):
     cap = cv2.VideoCapture(path)
     frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -55,7 +66,7 @@ def check_video_length(path):
     return True, None
 
 
-# RTSP CHECK
+# ─── RTSP CHECK ──────────────────────────────────────────────────
 def check_rtsp(url: str):
     if not url.startswith("rtsp://"):
         return False

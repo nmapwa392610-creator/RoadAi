@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from pathlib import Path
 
 from src.core.engine import AIEngine
-from src.core.security import rate_limit, check_file
+from src.core.security import rate_limit, check_file,verify_api_key
 
 
 app = FastAPI(title="Road AI")
@@ -29,10 +29,12 @@ def home():
 @app.post("/detect/image")
 async def detect_image(request: Request, file: UploadFile = File(...)):
     try:
+        if not verify_api_key(request):          # ← эти
+            return {"error": "unauthorized"}     # ← две строки
+
         ip = request.client.host
         if not rate_limit(ip):
             return {"error": "rate limit exceeded"}
-
 
         ok, err = check_file(file)
         if not ok:
@@ -65,8 +67,10 @@ async def detect_image(request: Request, file: UploadFile = File(...)):
 @app.post("/detect/video")
 async def detect_video(request: Request, file: UploadFile = File(...)):
     try:
-        ip = request.client.host
+        if not verify_api_key(request):          # ← эти
+            return {"error": "unauthorized"}     # ← две строки
 
+        ip = request.client.host
         if not rate_limit(ip):
             return {"error": "rate limit exceeded"}
 
@@ -101,8 +105,10 @@ class RTSPRequest(BaseModel):
 @app.post("/rtsp/start")
 async def rtsp_start(req: RTSPRequest, request: Request):
     try:
-        ip = request.client.host
+        if not verify_api_key(request):          # ← эти
+            return {"error": "unauthorized"}     # ← две строки
 
+        ip = request.client.host
         if not rate_limit(ip):
             return {"error": "rate limit exceeded"}
 

@@ -1,7 +1,7 @@
 from src.pipelines.image import run_pipeline_image
 from src.pipelines.video import process_video
 from src.pipelines.frame import run_pipeline_frame
-from src.pipelines.rtsp_usual import start_rtsp_stream, stop_rtsp_stream
+from src.pipelines.rtsp_usual import start_rtsp_stream,stop_rtsp_stream
 
 class AIEngine:
 
@@ -44,7 +44,6 @@ class AIEngine:
 
         return {"status": "stopped"}
 
-    # ---------------- LIVE FRAME ----------------
     def get_live_frame(self, camera_id="default"):
 
         data = self.streams.get(camera_id)
