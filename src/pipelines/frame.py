@@ -3,7 +3,7 @@ from src.utils.nms import filter_boxes
 
 detector = Detector()
 
-FILTER_THRESHOLD = 0.25
+FILTER_THRESHOLD = 0.5
 
 
 def get_severity(conf):
@@ -14,11 +14,15 @@ def get_severity(conf):
     return "low"
 
 
-def run_pipeline_frame(frame):
+def run_pipeline_frame(frame, use_tracking=False):
     try:
-        results = detector.predict(frame)
-        r = results[0]
+        # используем tracking если нужно
+        if use_tracking:
+            results = detector.track(frame, persist=True)
+        else:
+            results = detector.predict(frame)
 
+        r = results[0]
         detections = []
 
         for box in r.boxes:
@@ -29,11 +33,16 @@ def run_pipeline_frame(frame):
 
             cls_id = int(box.cls)
             cls_name = detector.model.names[cls_id]
-
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             area = (x2 - x1) * (y2 - y1)
 
+            # track_id только если tracking включён
+            track_id = None
+            if use_tracking and box.id is not None:
+                track_id = int(box.id)
+
             detections.append({
+                "track_id": track_id if track_id is not None else "untracked",
                 "bbox": [x1, y1, x2, y2],
                 "confidence": conf,
                 "class_id": cls_id,

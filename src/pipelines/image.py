@@ -1,7 +1,7 @@
 from src.core.detector import Detector
 from src.utils.nms import filter_boxes
 
-FILTER_THRESHOLD = 0.25
+FILTER_THRESHOLD = 0.5
 
 detector = Detector()
 
