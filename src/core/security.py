@@ -6,9 +6,12 @@ import cv2
 
 # ─── API KEY AUTH ────────────────────────────────────────────────
 INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
+print(f"SECURITY MODULE LOADED, KEY={repr(INTERNAL_API_KEY)}")  # ← добавь
 
 def verify_api_key(request) -> bool:
     key = request.headers.get("X-API-Key", "")
+    print(f"REQUEST key={repr(key)}")
+    print(f"EXPECTED={repr(INTERNAL_API_KEY)}")
     if not key or not INTERNAL_API_KEY:
         return False
     return secrets.compare_digest(key, INTERNAL_API_KEY)
