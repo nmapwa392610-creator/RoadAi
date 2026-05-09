@@ -1,12 +1,14 @@
 from src.core.detector import Detector
 from src.utils.nms import filter_boxes
 
-FILTER_THRESHOLD = 0.5
-
 detector = Detector()
 
+# Минимальный порог уверенности — детекции ниже этого значения игнорируются
+FILTER_THRESHOLD = 0.5
 
-def get_severity(conf):
+
+def get_severity(conf: float) -> str:
+    # Определяем серьёзность дефекта по уверенности модели
     if conf > 0.8:
         return "high"
     elif conf > 0.6:
@@ -16,6 +18,7 @@ def get_severity(conf):
 
 def run_pipeline_image(image_path):
     try:
+        # Запускаем детекцию на изображении — без tracking, ведь одиночный кадр
         results = detector.predict(image_path)
         r = results[0]
 
@@ -23,7 +26,7 @@ def run_pipeline_image(image_path):
 
         for box in r.boxes:
             conf = float(box.conf)
-
+            # пропуск слабых дефекций
             if conf < FILTER_THRESHOLD:
                 continue
 
@@ -42,6 +45,7 @@ def run_pipeline_image(image_path):
                 "severity": get_severity(conf)
             })
 
+        # Финальная фильтрация через NMS — убираем перекрывающиеся боксы
         cleaned = filter_boxes(detections)
 
         return {

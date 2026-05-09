@@ -18,7 +18,8 @@ class AIEngine:
         return run_pipeline_frame(frame)
 
     def start_rtsp(self, url, camera_id="default"):
-
+        # Запускает RTSP поток для указанной камеры
+        # callback вызывается на каждом новом кадре и сохраняет последний результат
         def callback(frame):
             result = self.process_frame(frame)
             self.streams[camera_id] = {
@@ -35,20 +36,19 @@ class AIEngine:
         }
 
     def stop_rtsp(self, camera_id="default"):
-
+        # Останавливает поток и удаляет его из памяти
         stream = self.streams.get(camera_id)
 
         if stream:
             stop_rtsp_stream(stream)
             self.streams.pop(camera_id, None)
-
         return {"status": "stopped"}
 
     def get_live_frame(self, camera_id="default"):
-
+        # Возвращает последний результат детекции для WebSocket
+        # Если поток не запущен — возвращает None
         data = self.streams.get(camera_id)
 
         if not data:
             return None
-
         return data.get("result")
