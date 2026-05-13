@@ -20,19 +20,20 @@ def calc_iou(box1, box2) -> float:
     return intersection / union if union > 0 else 0.0
 
 
-def process_video(video_path, frame_skip=20):
-    # Открываем видео через FFMPEG
+def process_video(video_path, frame_skip=60):  # каждые 2 сек при 30fps
     cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
-
     if not cap.isOpened():
         return {"error": "video not opened", "path": video_path}
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 0
-
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_id = 0
     results_all = []
-    seen_track_ids = set()  # уже виденные track_id
-    seen_boxes = []         # уже виденные bbox — для untracked случаев
+    seen_track_ids = set()
+    seen_boxes = []
+
+    # Сколько кадров держать bbox в памяти (10 секунд)
+    FORGET_AFTER_FRAMES = int(fps * 10)
+    seen_boxes_with_frame = []  # [(box, frame_id), ...]
 
     try:
         while True:
@@ -40,58 +41,61 @@ def process_video(video_path, frame_skip=20):
             if not ret:
                 break
 
-            # Обрабатываем только каждый frame_skip-й кадр — экономим ресурсы
             if frame_id % frame_skip != 0:
                 frame_id += 1
                 continue
 
-            frame = cv2.resize(frame, (640, 640))
+            # Забываем старые bbox — камера уже уехала
+            seen_boxes_with_frame = [
+                (b, fid) for b, fid in seen_boxes_with_frame
+                if frame_id - fid < FORGET_AFTER_FRAMES
+            ]
+            seen_boxes = [b for b, _ in seen_boxes_with_frame]
 
-            # Запускаем детекцию с tracking — каждая яма получает track_id
-            detections = run_pipeline_frame(frame, use_tracking=True)
+            frame_resized = cv2.resize(frame, (640, 640))
+            detections = run_pipeline_frame(frame_resized, use_tracking=True)
 
-            if detections and isinstance(detections, list):
-                new_detections = []
+            if not detections or not isinstance(detections, list):
+                frame_id += 1
+                continue
 
-                for det in detections:
-                    tid = det.get("track_id")
-                    box = det["bbox"]
+            new_detections = []
+            for det in detections:
+                tid = det.get("track_id")
+                box = det["bbox"]
 
-                    if tid is not None and tid != "untracked":
-                        if tid not in seen_track_ids:
-                            # Проверяем по IoU — вдруг эту яму уже видели как untracked
-                            is_dup = any(calc_iou(box, seen) >= 0.4 for seen in seen_boxes)
-                            if not is_dup:
-                                seen_track_ids.add(tid)
-                                seen_boxes.append(box)
-                                new_detections.append(det)
-                            else:
-                                # Дубликат untracked — просто запоминаем track_id
-                                seen_track_ids.add(tid)
-
+                if tid and tid != "untracked":
+                    if tid in seen_track_ids:
+                        continue
+                    is_dup = any(calc_iou(box, b) >= 0.3 for b in seen_boxes)
+                    if not is_dup:
+                        seen_track_ids.add(tid)
+                        seen_boxes_with_frame.append((box, frame_id))
+                        seen_boxes.append(box)
+                        new_detections.append(det)
                     else:
-                        # track_id нет — проверяем только по IoU
-                        is_dup = any(calc_iou(box, seen) >= 0.4 for seen in seen_boxes)
-                        if not is_dup:
-                            seen_boxes.append(box)
-                            new_detections.append(det)
+                        seen_track_ids.add(tid)
+                else:
+                    is_dup = any(calc_iou(box, b) >= 0.3 for b in seen_boxes)
+                    if not is_dup:
+                        seen_boxes_with_frame.append((box, frame_id))
+                        seen_boxes.append(box)
+                        new_detections.append(det)
 
-                if new_detections:
-                    results_all.append({
-                        "frame": frame_id,
-                        "timestamp": frame_id / fps if fps else None,
-                        "detections": new_detections
-                    })
+            if new_detections:
+                results_all.append({
+                    "frame": frame_id,
+                    "timestamp": round(frame_id / fps, 2),
+                    "detections": new_detections,
+                })
 
             frame_id += 1
 
         return {
             "status": "ok",
             "frames_processed": frame_id,
-            "unique_defects": len(seen_boxes),  # количество уникальных ям во всём видео
-            "results": results_all
+            "unique_defects": len(seen_boxes),
+            "results": results_all,
         }
-
     finally:
-        # Освобождаем ресурсы даже если произошла ошибка
         cap.release()

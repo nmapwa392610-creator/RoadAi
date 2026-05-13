@@ -20,7 +20,7 @@ def verify_api_key(request) -> bool:
 # Словарь хранит историю запросов по IP
 _requests = {}
 
-def rate_limit(ip: str, limit: int = 10, window: int = 60):
+def rate_limit(ip: str, limit: int = 100, window: int = 60):
     # Защита от DDoS — не более 10 запросов в 60 секунд с одного IP
     now = time.time()
 
@@ -91,20 +91,16 @@ def check_video_length(path):
 
 
 def check_rtsp(url: str) -> tuple[bool, str]:
-    # Проверяем протокол
     if not url.startswith(("rtsp://", "rtsps://")):
         return False, "invalid protocol"
 
-    # Проверяем что нет опасных символов — защита от инъекций
     if any(c in url for c in [";", "|", "&", "`", "$", "(", ")", "<", ">"]):
         return False, "invalid characters in url"
 
-    # Проверяем формат URL через regex
-    pattern = r"^rtsps?://[\w\.\-]+(:\d+)?(/[\w\.\-/]*)?$"
+    pattern = r"^rtsps?://[^@\s]*(:\d+)?(/[\w.\-/]*)?$"  # поддержка user:pass@host
     if not re.match(pattern, url):
         return False, "invalid url format"
 
-    # Проверяем порт если указан — должен быть в допустимом диапазоне
     try:
         from urllib.parse import urlparse
         parsed = urlparse(url)
