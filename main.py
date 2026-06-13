@@ -1,15 +1,13 @@
-from dotenv import load_dotenv
-load_dotenv()
-
+import os
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, WebSocket, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.openapi.utils import get_openapi
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, field_validator
 
 from src.services.file_service import run_with_temp_file
@@ -17,7 +15,9 @@ from src.pipelines.image import run_pipeline_image
 from src.core.engine import AIEngine
 from src.core.security import rate_limit, check_file, verify_api_key, check_rtsp
 
-api_key_scheme = APIKeyHeader(name="X-API-Key")
+from fastapi.security import APIKeyHeader
+
+api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 @asynccontextmanager
@@ -27,11 +27,8 @@ async def lifespan(app: FastAPI):
     app.state.engine.stop_rtsp()
 
 
-# app создаётся ПЕРВЫМ
 app = FastAPI(title="Road AI", version="2.0", lifespan=lifespan)
 
-# Middleware ПОСЛЕ создания app
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,29 +37,29 @@ app.add_middleware(
 )
 
 
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
-    schema["components"]["securitySchemes"] = {
-        "ApiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
-    }
-    schema["security"] = [{"ApiKeyAuth": []}]
-    app.openapi_schema = schema
-    return schema
-
-
-app.openapi = custom_openapi
-
-
 def get_engine(request: Request) -> AIEngine:
     return request.app.state.engine
 
 
-def guard(request: Request, limit: int = 1000) -> None:
-    if not verify_api_key(request):
+async def check_auth(_key: str | None = Depends(api_key_scheme)):
+    if not _key:
+        raise HTTPException(status_code=401, detail="API key missing")
+
+    if not verify_api_key(_key):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    if not rate_limit(request.client.host, limit=limit):
+
+    return _key
+
+
+def check_rate_limit(request: Request, limit: int = 10) -> None:
+    client_ip = request.headers.get("X-Forwarded-For")
+    if client_ip:
+        # ИСПРАВЛЕНО: Сначала берем первый элемент из списка по индексу, затем делаем .strip()
+        client_ip = client_ip.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "127.0.0.1"
+
+    if not rate_limit(client_ip, limit=limit, window=60):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
@@ -72,30 +69,50 @@ def home():
 
 
 @app.post("/detect/image", tags=["detection"])
-async def detect_image(request: Request, file: UploadFile = File(...), _key: str = Depends(api_key_scheme)):
-    guard(request)
+async def detect_image(
+        request: Request,
+        file: UploadFile = File(...),
+        _key: str = Depends(check_auth)
+):
+    check_rate_limit(request)
+
     ok, err = check_file(file)
     if not ok:
         raise HTTPException(status_code=400, detail=err)
+
     ext = Path(file.filename).suffix.lower()
     file_bytes = await file.read()
+
     result = await asyncio.to_thread(
-        run_with_temp_file, file_bytes=file_bytes, ext=ext, pipeline_func=run_pipeline_image,
+        run_with_temp_file,
+        file_bytes=file_bytes,
+        ext=ext,
+        pipeline_func=run_pipeline_image,
     )
     return {"status": "ok", "result": result}
 
 
 @app.post("/detect/video", tags=["detection"])
-async def detect_video(request: Request, file: UploadFile = File(...), _key: str = Depends(api_key_scheme)):
-    guard(request)
+async def detect_video(
+        request: Request,
+        file: UploadFile = File(...),
+        _key: str = Depends(check_auth)
+):
+    check_rate_limit(request)
+
     ok, err = check_file(file)
     if not ok:
         raise HTTPException(status_code=400, detail=err)
+
     ext = Path(file.filename).suffix.lower()
     file_bytes = await file.read()
     engine = get_engine(request)
+
     result = await asyncio.to_thread(
-        run_with_temp_file, file_bytes=file_bytes, ext=ext, pipeline_func=engine.run_video,
+        run_with_temp_file,
+        file_bytes=file_bytes,
+        ext=ext,
+        pipeline_func=engine.run_video,
     )
     return {"status": "ok", "result": result}
 
@@ -112,18 +129,27 @@ class RTSPRequest(BaseModel):
 
 
 @app.post("/rtsp/start", tags=["rtsp"])
-async def rtsp_start(req: RTSPRequest, request: Request, _key: str = Depends(api_key_scheme)):
-    guard(request)
+async def rtsp_start(
+        req: RTSPRequest,
+        request: Request,
+        _key: str = Depends(check_auth)
+):
+    check_rate_limit(request)
+
     ok, err = check_rtsp(req.url)
     if not ok:
         raise HTTPException(status_code=400, detail=err)
+
     engine = get_engine(request)
     result = await asyncio.to_thread(engine.start_rtsp, req.url)
     return result
 
 
 @app.post("/rtsp/stop", tags=["rtsp"])
-async def rtsp_stop(request: Request, _key: str = Depends(api_key_scheme)):
+async def rtsp_stop(
+        request: Request,
+        _key: str = Depends(check_auth)
+):
     engine = get_engine(request)
     result = await asyncio.to_thread(engine.stop_rtsp)
     return result

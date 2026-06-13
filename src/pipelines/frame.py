@@ -1,14 +1,23 @@
+import threading
 from src.core.detector import Detector
 from src.utils.nms import filter_boxes
 
-detector = Detector()
+detector = None
+lock = threading.Lock()
 
-# Минимальный порог уверенности — детекции ниже этого значения игнорируются
+
+def get_detector():
+    global detector
+    with lock:
+        if detector is None:
+            detector = Detector()
+    return detector
+
+
 FILTER_THRESHOLD = 0.5
 
 
 def get_severity(conf: float) -> str:
-    # Определяем серьёзность дефекта по уверенности модели
     if conf > 0.8:
         return "high"
     elif conf > 0.6:
@@ -16,50 +25,68 @@ def get_severity(conf: float) -> str:
     return "low"
 
 
-def run_pipeline_frame(frame, use_tracking=False):
+def run_pipeline_frame(frame, use_tracking: bool = False):
+    # 1. ИСПРАВЛЕНО: Изменили имя на detector_instance, чтобы не затирать глобальный detector
+    detector_instance = get_detector()
     try:
-        # Tracking используется для видео и RTSP — даёт каждой яме уникальный ID
-        # Для одиночных изображений tracking не нужен
+        # Кэшируем имена классов сразу, чтобы не лезть в модель в цикле
+        names = detector_instance.model.names
+
+        # ---------------------------
+        # INFERENCE (Явно передаем device="cuda")
+        # ---------------------------
         if use_tracking:
-            results = detector.track(frame, persist=True)
+            results = detector_instance.track(frame, persist=True)
         else:
-            results = detector.predict(frame)
+            results = detector_instance.predict(frame)
 
         r = results[0]
-        detections = []
 
-        for box in r.boxes:
-            conf = float(box.conf)
-            # пропуск слабых дефекций
-            if conf < FILTER_THRESHOLD:
+        # если нет боксов — сразу выход
+        if r.boxes is None or len(r.boxes) == 0:
+            return []
+
+        # ---------------------------
+        # OPTIMIZED EXTRACTION
+        # ---------------------------
+        xyxy_np = r.boxes.xyxy.cpu().numpy()
+        conf_np = r.boxes.conf.cpu().numpy()
+        cls_np = r.boxes.cls.cpu().numpy()
+
+        has_ids = use_tracking and hasattr(r.boxes, "id") and r.boxes.id is not None
+        id_np = r.boxes.id.cpu().numpy() if has_ids else None
+
+        detections = []
+        for i in range(len(xyxy_np)):
+            score = float(conf_np[i])
+            if score < FILTER_THRESHOLD:
                 continue
 
-            cls_id = int(box.cls)
-            cls_name = detector.model.names[cls_id]
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            area = (x2 - x1) * (y2 - y1)
+            cls_id = int(cls_np[i])
+            # 2. ИСПРАВЛЕНО: берем имена из локального кэша names
+            cls_name = names[cls_id]
 
-            # track_id — уникальный ID ямы между кадрами
-            # "untracked" если tracking выключен или трекер потерял объект
-            track_id = None
-            if use_tracking and box.id is not None:
-                track_id = int(box.id)
+            x1, y1, x2, y2 = xyxy_np[i]
+            area = float((x2 - x1) * (y2 - y1))
+
+            track_id = int(id_np[i]) if has_ids else None
 
             detections.append({
                 "track_id": track_id if track_id is not None else "untracked",
-                "bbox": [x1, y1, x2, y2],
-                "confidence": conf,
+                "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                "confidence": score,
                 "class_id": cls_id,
                 "class_name": cls_name,
                 "area": area,
-                "severity": get_severity(conf)
+                "severity": get_severity(score)
             })
 
-        # Финальная фильтрация через NMS — убираем перекрывающиеся боксы
         return filter_boxes(detections)
 
     except Exception as e:
+        print(f"[PIPELINE ERROR] {e}")
         return {
+            "status": "error",
             "error": str(e),
-            "where": "pipeline_frame"
+            "where": "run_pipeline_frame"
         }

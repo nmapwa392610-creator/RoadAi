@@ -1,33 +1,49 @@
-import time
 import os
+import time
 import secrets
 from pathlib import Path
 import cv2
 import magic
-import re
+import logging
+from urllib.parse import urlparse
 
-# Ключ загружается из переменной окружения — не хранится в коде
-INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
 
-def verify_api_key(request) -> bool:
-    key = request.headers.get("X-API-Key", "")
-    if not key or not INTERNAL_API_KEY:
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("auth")
+
+INTERNAL_API_KEY = (os.getenv("INTERNAL_API_KEY") or "").strip()
+
+
+def verify_api_key(key: str) -> bool:
+    key = (key or "").strip()
+
+    if not key:
         return False
-    # compare_digest защищает от timing attack — нельзя угадать ключ по времени ответа
+
+    if not INTERNAL_API_KEY:
+        logger.error("INTERNAL_API_KEY is not set in environment")
+        return False
+
+    # debug only (не включать в prod постоянно)
+    logger.debug(f"API KEY received: {repr(key)}")
+
     return secrets.compare_digest(key, INTERNAL_API_KEY)
 
 
-# Словарь хранит историю запросов по IP
+
+# ===== RATE LIMIT =====
+
 _requests = {}
 
 def rate_limit(ip: str, limit: int = 100, window: int = 60):
-    # Защита от DDoS — не более 10 запросов в 60 секунд с одного IP
+    if limit <= 0 or window <= 0:
+        return False
+
     now = time.time()
 
     if ip not in _requests:
         _requests[ip] = []
 
-    # Убираем старые запросы за пределами окна
     _requests[ip] = [t for t in _requests[ip] if now - t < window]
 
     if len(_requests[ip]) >= limit:
@@ -37,26 +53,29 @@ def rate_limit(ip: str, limit: int = 100, window: int = 60):
     return True
 
 
-# проверка файлов
-ALLOWED_EXT = [".mp4", ".avi", ".jpg", ".png"]
-MAX_SIZE_MB = 100
-MAX_FRAMES = 10_000
+# ===== FILE CHECK =====
 
-# Разрешённые MIME типы — проверяем содержимое файла а не только расширение
-ALLOWED_MIME = [
+
+ALLOWED_EXT = {".mp4", ".avi", ".jpg", ".jpeg", ".png"}
+MAX_SIZE_MB = 100
+
+ALLOWED_MIME = {
     "image/jpeg",
     "image/png",
     "video/mp4",
-    "video/x-msvideo"  # .avi
-]
+    "video/x-msvideo"
+}
+
 
 def check_file(file):
-    # Проверяем расширение файла
-    ext = Path(file.filename).suffix.lower()
+    # 1. extension check
+    filename = file.filename or ""
+    ext = Path(filename).suffix.lower()
+
     if ext not in ALLOWED_EXT:
         return False, "invalid file type"
 
-    # Проверяем размер файла — не более 100MB
+    # 2. size check
     file.file.seek(0, 2)
     size = file.file.tell()
     file.file.seek(0)
@@ -64,49 +83,42 @@ def check_file(file):
     if size > MAX_SIZE_MB * 1024 * 1024:
         return False, "file too large"
 
-    # Проверяем реальный тип файла по содержимому — защита от переименованных файлов
-    # Например virus.exe переименованный в photo.jpg не пройдёт
-    header = file.file.read(2048)
+    # 3. read header
+    header = file.file.read(4096)
     file.file.seek(0)
-    mime = magic.from_buffer(header, mime=True)
 
-    if mime not in ALLOWED_MIME:
-        return False, "invalid file content"
+    # 4. MIME check (safe fallback)
+    try:
+        import magic
+        mime = magic.from_buffer(header, mime=True)
+    except Exception:
+        # fallback если magic сломан в Docker
+        mime = None
 
-    return True, None
-
-
-
-def check_video_length(path):
-    # Проверяем количество кадров — защита от слишком длинных видео
-    cap = cv2.VideoCapture(path)
-    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
-
-    if frames > MAX_FRAMES:
-        return False, "video too long"
+    # 5. allow fallback if MIME unknown
+    if mime and mime not in ALLOWED_MIME:
+        return False, f"invalid file content: {mime}"
 
     return True, None
 
 
+# ===== RTSP CHECK =====
 
-def check_rtsp(url: str) -> tuple[bool, str]:
+def check_rtsp(url: str):
+    url = (url or "").strip()
+
     if not url.startswith(("rtsp://", "rtsps://")):
         return False, "invalid protocol"
 
-    if any(c in url for c in [";", "|", "&", "`", "$", "(", ")", "<", ">"]):
-        return False, "invalid characters in url"
+    parsed = urlparse(url)
 
-    pattern = r"^rtsps?://[^@\s]*(:\d+)?(/[\w.\-/]*)?$"  # поддержка user:pass@host
-    if not re.match(pattern, url):
-        return False, "invalid url format"
+    if not parsed.hostname:
+        return False, "missing host"
 
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        if parsed.port and not (1 <= parsed.port <= 65535):
-            return False, "invalid port"
-    except Exception:
-        return False, "invalid url"
+    # защита от localhost / internal networks (очень важно!)
+    blocked_hosts = ["localhost", "127.0.0.1", "0.0.0.0"]
+
+    if parsed.hostname in blocked_hosts:
+        return False, "blocked host"
 
     return True, None

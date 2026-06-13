@@ -1,8 +1,5 @@
-from RoadAi.src.core.detector import Detector
-
-detector = Detector()
-
-results = detector.predict("test.jpg")
-
-print(results)
-print(results[0].boxes)
+ok, err = check_file(uploaded_file)
+if not ok:
+    import magic
+    header = uploaded_file.file.read(4096)
+    print("Magic MIME:", magic.from_buffer(header, mime=True))

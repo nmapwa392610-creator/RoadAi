@@ -1,7 +1,18 @@
+import threading
 from src.core.detector import Detector
 from src.utils.nms import filter_boxes
 
-detector = Detector()
+detector = None
+lock = threading.Lock()
+
+
+def get_detector():
+    global detector
+    with lock:
+        if detector is None:
+            detector = Detector()
+    return detector
+
 
 # Минимальный порог уверенности — детекции ниже этого значения игнорируются
 FILTER_THRESHOLD = 0.5
@@ -16,14 +27,19 @@ def get_severity(conf: float) -> str:
     return "low"
 
 
-def run_pipeline_image(image_path):
+def run_pipeline_image(image):
     try:
-        # Запускаем детекцию на изображении — без tracking, ведь одиночный кадр
-        results = detector.predict(image_path)
+        # 1. Получаем инстанс детектора ОДИН раз
+        detector_instance = get_detector()
+
+        # 2. Запускаем на GPU, чтобы избежать бага primitives на CPU сервера
+        results = detector_instance.predict(image)
         r = results[0]
 
-        detections = []
+        # Кэшируем имена классов модели
+        names = detector_instance.model.names
 
+        detections = []
         for box in r.boxes:
             conf = float(box.conf)
             # пропуск слабых дефекций
@@ -31,7 +47,8 @@ def run_pipeline_image(image_path):
                 continue
 
             cls_id = int(box.cls)
-            cls_name = detector.model.names[cls_id]
+            # 3. ИСПРАВЛЕНО: берем имя класса из локальной переменной names
+            cls_name = names[cls_id]
 
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             area = (x2 - x1) * (y2 - y1)
@@ -47,13 +64,11 @@ def run_pipeline_image(image_path):
 
         # Финальная фильтрация через NMS — убираем перекрывающиеся боксы
         cleaned = filter_boxes(detections)
-
         return {
             "detections": cleaned,
             "count": len(cleaned),
             "status": "ok"
         }
-
     except Exception as e:
         return {
             "error": str(e),
