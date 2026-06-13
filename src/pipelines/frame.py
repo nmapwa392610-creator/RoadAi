@@ -14,7 +14,7 @@ def get_detector():
     return detector
 
 
-FILTER_THRESHOLD = 0.5
+FILTER_THRESHOLD = 0.4
 
 
 def get_severity(conf: float) -> str:
