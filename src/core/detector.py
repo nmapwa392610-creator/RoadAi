@@ -3,6 +3,7 @@ from ultralytics import YOLO
 
 # FIX CPU backend crash
 torch.backends.mkldnn.enabled = False
+torch.backends.nnpack.enabled = False
 
 try:
     torch.backends.nnpack.enabled = False

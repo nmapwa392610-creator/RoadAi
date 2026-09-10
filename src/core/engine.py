@@ -1,12 +1,15 @@
 from src.pipelines.image import run_pipeline_image
 from src.pipelines.video import process_video
 from src.pipelines.frame import run_pipeline_frame
-from src.pipelines.rtsp_usual import start_rtsp_stream,stop_rtsp_stream
+from src.pipelines.rtsp_usual import start_rtsp_stream, stop_rtsp_stream
+
 
 class AIEngine:
 
     def __init__(self):
-        self.streams = {}
+        # Храним отдельно данные кадров и отдельно объекты потоков
+        self.streams = {}  # Для хранения объектов потоков (чтобы их останавливать)
+        self.live_results = {}  # Для хранения последних результатов кадров (для WebSocket)
 
     def run_image(self, path):
         return run_pipeline_image(path)
@@ -18,15 +21,15 @@ class AIEngine:
         return run_pipeline_frame(frame)
 
     def start_rtsp(self, url, camera_id="default"):
-        # Запускает RTSP поток для указанной камеры
-        # callback вызывается на каждом новом кадре и сохраняет последний результат
+        # Callback теперь пишет в изолированный словарь live_results
         def callback(frame):
             result = self.process_frame(frame)
-            self.streams[camera_id] = {
+            self.live_results[camera_id] = {
                 "frame": frame,
                 "result": result
             }
 
+        # Запускаем поток и сохраняем его объект управления
         stream = start_rtsp_stream(url, callback)
         self.streams[camera_id] = stream
 
@@ -36,18 +39,22 @@ class AIEngine:
         }
 
     def stop_rtsp(self, camera_id="default"):
-        # Останавливает поток и удаляет его из памяти
+        # Извлекаем объект потока
         stream = self.streams.get(camera_id)
 
         if stream:
+            # Передаем сам объект потока во внешнюю функцию остановки
             stop_rtsp_stream(stream)
+            # Полностью очищаем память от этого потока
             self.streams.pop(camera_id, None)
-        return {"status": "stopped"}
+            self.live_results.pop(camera_id, None)
+            return {"status": "stopped"}
+
+        return {"status": "not_found", "message": f"Stream {camera_id} is not running"}
 
     def get_live_frame(self, camera_id="default"):
-        # Возвращает последний результат детекции для WebSocket
-        # Если поток не запущен — возвращает None
-        data = self.streams.get(camera_id)
+        # Забираем актуальные данные детекции из live_results
+        data = self.live_results.get(camera_id)
 
         if not data:
             return None

@@ -32,9 +32,7 @@ def run_pipeline_frame(frame, use_tracking: bool = False):
         # Кэшируем имена классов сразу, чтобы не лезть в модель в цикле
         names = detector_instance.model.names
 
-        # ---------------------------
-        # INFERENCE (Явно передаем device="cuda")
-        # ---------------------------
+
         if use_tracking:
             results = detector_instance.track(frame, persist=True)
         else:
@@ -46,9 +44,7 @@ def run_pipeline_frame(frame, use_tracking: bool = False):
         if r.boxes is None or len(r.boxes) == 0:
             return []
 
-        # ---------------------------
-        # OPTIMIZED EXTRACTION
-        # ---------------------------
+
         xyxy_np = r.boxes.xyxy.cpu().numpy()
         conf_np = r.boxes.conf.cpu().numpy()
         cls_np = r.boxes.cls.cpu().numpy()

@@ -140,9 +140,12 @@ async def rtsp_start(
     if not ok:
         raise HTTPException(status_code=400, detail=err)
 
-    engine = get_engine(request)
-    result = await asyncio.to_thread(engine.start_rtsp, req.url)
-    return result
+    engine = getattr(request.app.state, "engine", None)
+
+    if not engine:
+        raise HTTPException(501, "RTSP service not available")
+
+    return await asyncio.to_thread(engine.stop_rtsp)
 
 
 @app.post("/rtsp/stop", tags=["rtsp"])
@@ -150,26 +153,40 @@ async def rtsp_stop(
         request: Request,
         _key: str = Depends(check_auth)
 ):
-    engine = get_engine(request)
-    result = await asyncio.to_thread(engine.stop_rtsp)
-    return result
+    engine = getattr(request.app.state, "engine", None)
+
+    if not engine:
+        raise HTTPException(501, "RTSP service not available")
+
+    return await asyncio.to_thread(engine.stop_rtsp)
 
 
 @app.websocket("/ws/live")
 async def ws_live(ws: WebSocket):
     await ws.accept()
-    engine = ws.app.state.engine
+
+    engine = getattr(ws.app.state, "engine", None)
+
+    if engine is None:
+        await ws.send_json({"error": "engine not available"})
+        await ws.close()
+        return
+
     try:
         while True:
             data = engine.get_live_frame()
+
             if not data:
                 await asyncio.sleep(0.033)
                 continue
+
             await ws.send_json({"status": "ok", "data": data})
+
     except Exception as e:
         try:
             await ws.send_json({"error": str(e)})
         except Exception:
             pass
+
     finally:
         await ws.close()

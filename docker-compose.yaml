@@ -1,0 +1,9 @@
+name: AI_ROAD_backend
+
+services:
+  backend:
+    build:  .
+    container_name: my_backend_app
+    ports:
+      - "8080:8080"
+    restart: always

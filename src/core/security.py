@@ -2,7 +2,6 @@ import os
 import time
 import secrets
 from pathlib import Path
-import cv2
 import magic
 import logging
 from urllib.parse import urlparse
@@ -15,19 +14,20 @@ INTERNAL_API_KEY = (os.getenv("INTERNAL_API_KEY") or "").strip()
 
 
 def verify_api_key(key: str) -> bool:
+    internal = (os.getenv("INTERNAL_API_KEY") or "").strip()
     key = (key or "").strip()
 
     if not key:
         return False
 
-    if not INTERNAL_API_KEY:
+    if not internal:
         logger.error("INTERNAL_API_KEY is not set in environment")
         return False
 
     # debug only (не включать в prod постоянно)
     logger.debug(f"API KEY received: {repr(key)}")
 
-    return secrets.compare_digest(key, INTERNAL_API_KEY)
+    return secrets.compare_digest(key, internal)
 
 
 
@@ -80,6 +80,9 @@ def check_file(file):
     size = file.file.tell()
     file.file.seek(0)
 
+    if size == 0:
+        return False, "empty file"
+
     if size > MAX_SIZE_MB * 1024 * 1024:
         return False, "file too large"
 
@@ -89,7 +92,6 @@ def check_file(file):
 
     # 4. MIME check (safe fallback)
     try:
-        import magic
         mime = magic.from_buffer(header, mime=True)
     except Exception:
         # fallback если magic сломан в Docker
